@@ -1,21 +1,134 @@
-use std::fmt::{Display, Formatter};
+//! This module contains the implementation of [`Map`] and its methods.
 
+#[allow(unused_imports)]
+use crate::Row;
+
+use std::{
+    collections::HashSet,
+    fmt::{Display, Formatter},
+    slice::Iter,
+};
+
+/// A struct containing a reordering of a [`Row`].
+///
+/// A [`Map`] defines the relationship between the source index (src) and the destination index (dest) of a column.
+/// If the mapping is from source `i` to destination `j`, the value in [`Row`] at index `i` is moved to index `j` in the resulting [`Row`].
+/// If the value of the [`Option`] at source `i` is the [`None`] variant the value of [`Row`] at this index is not part of the new [`Row`].
+///
+/// Per definitionem any [`Ok`] instance created with the provided initializers will be valid.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Map {
+    /// The source-destination-mapping.
     map: Vec<Option<usize>>,
+
+    /// The largest destination index.
     max: usize,
 }
 
 impl Map {
-    pub fn new(map: Vec<Option<usize>>) -> Result<Self, MapError> {
-        let max: usize = Self::max_index(&map);
+    /// Creates a new [`Map`] instance based on a given `map`ping.
+    ///
+    /// This is the primary constructor.
+    /// It takes a vector where the index represents the source field and
+    /// the value represents the destination.
+    /// A value of `Some(dest)` maps the source to a destination,
+    /// while [`None`] indicates that the source field should be dropped.
+    ///
+    /// # Errors
+    ///
+    /// * [`MapError::DuplicateIndex`] - An destination index was used twice.
+    /// * [`MapError::IndexTooLarge`] - The largest destination index is [`usize::MAX`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use remap::{Map, MapError};
+    /// // Swaps the first two columns and dropps the third.
+    /// let map_vec: Vec<Option<usize>> = vec![Some(1), Some(0), None];
+    /// let map: Map = Map::new(map_vec).unwrap();
+    /// assert_eq!(map.destination(0), Some(1));
+    /// assert_eq!(map.destination(1), Some(0));
+    /// assert_eq!(map.destination(2), None);
+    ///
+    /// // DuplicateIndex
+    /// let map_vec: Vec<Option<usize>> = vec![Some(0), Some(0), None];
+    /// let duplicate_index: MapError = Map::new(map_vec).err().unwrap();
+    /// assert_eq!(duplicate_index, MapError::DuplicateIndex { dest: 0 });
+    ///
+    /// // IndexTooLarge
+    /// let map_vec: Vec<Option<usize>> = vec![Some(usize::MAX), None];
+    /// let index_too_large: MapError = Map::new(map_vec).err().unwrap();
+    /// assert_eq!(index_too_large, MapError::IndexTooLarge);
+    /// ```
+    pub fn new(vec: Vec<Option<usize>>) -> Result<Self, MapError> {
+        // Caching
+        let max: usize = Self::max_dest_index(&vec);
 
-        MapError::check_map(&map)?;
+        MapError::check_vec(&vec)?;
         MapError::check_index(max)?;
 
-        Ok(Self { map, max })
+        Ok(Self { map: vec, max })
     }
 
+    /// Creates the identity mapping.
+    ///
+    /// This maps each column to itself.
+    /// Therefore, 0 -> 0, ..., length-1 -> length-1.
+    ///
+    /// Per definitionem this can not fail.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use remap::Map;
+    /// let map: Map = Map::identity(3);
+    /// assert_eq!(map.destination(0), Some(0));
+    /// assert_eq!(map.destination(1), Some(1));
+    /// assert_eq!(map.destination(2), Some(2));
+    /// assert_eq!(map.destination(3), None);
+    /// ```
+    pub fn identity(length: usize) -> Self {
+        // Can not fail
+        let map: Vec<Option<usize>> = (0..length).map(Some).collect();
+        let max: usize = length.saturating_sub(1);
+
+        Self { map, max }
+    }
+
+    /// Creates a new [`Map`] instance with a sequential mapping.
+    ///
+    /// This maps `src_start` to `dest_start` and `src_start + 1` to `dest_start + 1` up until `src_end`.
+    /// `src_end` is excluded.
+    /// All values before `src_start` are marked with [`None`] and therefore dropped.
+    ///
+    /// # Errors
+    ///
+    /// * [`MapError::RangeError`] - The `src_start` is larger than `src_end`.
+    /// * [`MapError::IndexTooLarge`] - The `dest_start + (src_end - src_start)` is larger than [`usize::MAX`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use remap::{Map, MapError};
+    /// // Maps 2 -> 4, 3 -> 5, 4 -> 6, 5 -> 7, 6 -> 8
+    /// let map: Map = Map::sequential(2, 7, 4).unwrap();
+    /// assert_eq!(map.destination(0), None);
+    /// assert_eq!(map.destination(4), Some(6));
+    /// assert_eq!(map.destination(7), None);
+    ///
+    /// // Empty mapping
+    /// let map: Map = Map::sequential(0, 0, 0).unwrap();
+    /// assert_eq!(map.destination(0), None);
+    /// assert_eq!(map.len(), 0);
+    ///
+    /// // RangeError
+    /// let range_error: MapError = Map::sequential(7, 2, 4).err().unwrap();
+    /// assert_eq!(range_error, MapError::RangeError { src_start: 7, src_end: 2 });
+    ///
+    /// // IndexTooLarge
+    /// let index_too_large: MapError = Map::sequential(0, 5, usize::MAX - 1).err().unwrap();
+    /// assert_eq!(index_too_large, MapError::IndexTooLarge);
+    /// ```
     pub fn sequential(
         src_start: usize,
         src_end: usize,
@@ -24,11 +137,7 @@ impl Map {
         MapError::check_range(src_start, src_end)?;
         MapError::check_overflow(src_start, src_end, dest_start)?;
 
-        let max: usize = if src_start < src_end {
-            dest_start + (src_end - src_start) - 1
-        } else {
-            0
-        };
+        let max: usize = (dest_start + src_end.saturating_sub(src_start)).saturating_sub(1);
 
         let mut map: Vec<Option<usize>> = vec![None; src_end];
 
@@ -43,54 +152,162 @@ impl Map {
         Ok(Self { map, max })
     }
 
+    /// Creates a tuple of two [`Map`]s that splices two [`Row`]s.
+    ///
+    /// This will take the part from `src_start_1` to `src_end_1` (excluding) of [`Row`] 1 and
+    /// concatenate the part from `src_start_2` to `src_end_2` (excluding) of [`Row`] 2.
+    ///
+    /// This uses the [`Map::sequential`] method.
+    ///
+    /// # Errors
+    ///
+    /// * [`MapError::RangeError`] - The `src_start_*` is larger than `src_end_*`.
+    /// * [`MapError::IndexTooLarge`] - The combined length of the two ranges exceeds [`usize::MAX`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use remap::{Map, MapError};
+    /// // Column 0 and 1 from row 1 and 1 and 2 from row 2.
+    /// let (map_1, map_2): (Map, Map) = Map::splice(0, 2, 1, 3).unwrap();
+    /// assert_eq!(map_1.destination(0), Some(0));
+    /// assert_eq!(map_1.destination(1), Some(1));
+    /// assert_eq!(map_1.destination(2), None);
+    /// assert_eq!(map_2.destination(0), None);
+    /// assert_eq!(map_2.destination(1), Some(2));
+    /// assert_eq!(map_2.destination(2), Some(3));
+    /// assert_eq!(map_2.destination(3), None);
+    ///
+    /// // RangeError
+    /// let range_error: MapError = Map::splice(2, 0, 1, 3).err().unwrap();
+    /// assert_eq!(range_error, MapError::RangeError { src_start: 2, src_end: 0 });
+    ///
+    /// // IndexTooLarge
+    /// let index_too_large: MapError = Map::splice(0, usize::MAX, 0, 1).err().unwrap();
+    /// assert_eq!(index_too_large, MapError::IndexTooLarge);
+    /// ```
     pub fn splice(
         src_start_1: usize,
         src_end_1: usize,
         src_start_2: usize,
         src_end_2: usize,
     ) -> Result<(Self, Self), MapError> {
+        let len_1: usize = src_end_1.saturating_sub(src_start_1);
+        let len_2: usize = src_end_2.saturating_sub(src_start_2);
+
+        // Prematurely triggers the `IndexTooLarge` error
+        if len_1.checked_add(len_2).is_none() {
+            return Err(MapError::IndexTooLarge);
+        }
+
         let map_1: Map = Self::sequential(src_start_1, src_end_1, 0)?;
-        let map_2: Map = Self::sequential(
-            src_start_2,
-            src_end_2,
-            src_end_1.saturating_sub(src_start_1),
-        )?;
+        let map_2: Map = Self::sequential(src_start_2, src_end_2, len_1)?;
 
         Ok((map_1, map_2))
     }
 
-    pub fn identity(length: usize) -> Self {
-        let map: Vec<Option<usize>> = (0..length).map(Some).collect();
-        let max: usize = length.saturating_sub(1);
-
-        Self { map, max }
-    }
-
-    pub fn as_slice(&self) -> &[Option<usize>] {
-        &self.map
-    }
-
-    pub fn len(&self) -> usize {
-        self.map.len()
-    }
-
+    /// Finds the destination index for a given source index.
+    ///
+    /// The `Some(usize)` is returned when `src` is in bounds and has a mapping.
+    /// The [`None`] is returned when `src` is out of bounds or does not have a mapping.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use remap::Map;
+    /// let map_vec: Vec<Option<usize>> = vec![Some(1), Some(0), None];
+    /// let map: Map = Map::new(map_vec).unwrap();
+    /// assert_eq!(map.destination(0), Some(1));
+    /// assert_eq!(map.destination(1), Some(0));
+    /// assert_eq!(map.destination(2), None);
+    /// ```
     pub fn destination(&self, src: usize) -> Option<usize> {
         self.map.get(src).copied().flatten()
     }
 
-    fn max_index(vec: &Vec<Option<usize>>) -> usize {
-        vec.iter()
-            .filter_map(|dest_opt| *dest_opt)
-            .max()
-            .unwrap_or(0)
+    /// Returns the [`Map`] as an [`Iter`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use remap::Map;
+    /// let map_vec: Vec<Option<usize>> = vec![Some(1), Some(0), None];
+    /// let map: Map = Map::new(map_vec).unwrap();
+    /// let sum: usize = map.iter().filter_map(|dest| *dest).sum();
+    /// assert_eq!(sum, 1);
+    /// ```
+    pub fn iter(&self) -> Iter<'_, Option<usize>> {
+        self.map.iter()
     }
 
+    /// Returns the total number of source indices covered by the map.
+    ///
+    /// This represents the size of the source domain.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use remap::Map;
+    /// let map_vec: Vec<Option<usize>> = vec![Some(1), Some(0), None];
+    /// let map: Map = Map::new(map_vec).unwrap();
+    /// assert_eq!(map.len(), 3);
+    ///
+    /// let map: Map = Map::sequential(0, 10, 0).unwrap();
+    /// assert_eq!(map.len(), 10);
+    /// ```
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Returns a slice inside the [`Map`].
+    ///
+    /// Each element in the slice corresponds to a source index.
+    /// The value is `Some(dest)` if a mapping exists to a destination index, or [`None`] if not.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use remap::Map;
+    /// let map_vec: Vec<Option<usize>> = vec![Some(1), Some(0), None];
+    /// let map: Map = Map::new(map_vec).unwrap();
+    /// assert_eq!(map.as_slice()[1], Some(0));
+    ///
+    /// let map: Map = Map::identity(3);
+    /// assert_eq!(map.as_slice()[1], Some(1));
+    /// ```
+    pub fn as_slice(&self) -> &[Option<usize>] {
+        &self.map
+    }
+
+    /// Returns the largest destination index of a [`Map`] instance.
+    ///
+    /// The [`Map::max`] of an empty [`Map`] is `0`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use remap::Map;
+    /// let map_vec: Vec<Option<usize>> = vec![Some(1), Some(0), None];
+    /// let map: Map = Map::new(map_vec).unwrap();
+    /// assert_eq!(map.max(), 1);
+    ///
+    /// let map: Map = Map::identity(0);
+    /// assert_eq!(map.max(), 0);
+    /// ```
     pub fn max(&self) -> usize {
         self.max
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, Option<usize>> {
-        self.map.iter()
+    /// Calculates the largest destination index of a [`Vec<Option<usize>>`].
+    ///
+    /// This is used as a helper to populate the `max` field of the [`Map`] struct.
+    ///
+    /// This is set to `0` for the empty mapping.
+    fn max_dest_index(vec: &Vec<Option<usize>>) -> usize {
+        vec.iter()
+            .filter_map(|dest_opt| *dest_opt)
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -120,18 +337,32 @@ impl Display for Map {
     }
 }
 
+/// An enum for handling the errors involved in the creation of [`Map`] instances.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum MapError {
+    /// A destination occurs (at least) twice.
     DuplicateIndex { dest: usize },
+
+    /// The destination index is too large.
+    ///
+    /// This would cause overflow when calculating the size of a destination row.
+    ///
+    /// In a real world scenario this will probably never happen,
+    /// because a file with [`usize::MAX`] amount of columns would be ginormous.
     IndexTooLarge,
+
+    /// The range of the destination indices are reversed.
     RangeError { src_start: usize, src_end: usize },
 }
 
 impl MapError {
-    fn check_map(map: &Vec<Option<usize>>) -> Result<(), MapError> {
-        let mut seen_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    /// Checks a [`Vec`]tor for duplicate destinations.
+    ///
+    /// This creates a [`HashSet`].
+    fn check_vec(vec: &Vec<Option<usize>>) -> Result<(), MapError> {
+        let mut seen_indices: HashSet<usize> = HashSet::new();
 
-        for dest_opt in map {
+        for dest_opt in vec {
             if let Some(dest) = *dest_opt {
                 if !seen_indices.insert(dest) {
                     return Err(MapError::DuplicateIndex { dest });
@@ -142,6 +373,7 @@ impl MapError {
         Ok(())
     }
 
+    /// Checks if the largest destination index is [`usize::MAX`].
     fn check_index(max: usize) -> Result<(), MapError> {
         if max != usize::MAX {
             Ok(())
@@ -150,6 +382,7 @@ impl MapError {
         }
     }
 
+    /// Checks if the range is correctly sorted.
     fn check_range(src_start: usize, src_end: usize) -> Result<(), MapError> {
         if src_start <= src_end {
             Ok(())
@@ -158,6 +391,7 @@ impl MapError {
         }
     }
 
+    /// Checks if the largest destination index is [`usize::MAX`]
     fn check_overflow(src_start: usize, src_end: usize, dest_start: usize) -> Result<(), MapError> {
         if dest_start.checked_add(src_end - src_start).is_some() {
             Ok(())
