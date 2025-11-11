@@ -20,14 +20,14 @@ A `None` value indicates that the source column should be dropped.
 
 # TODOs
 
-- [ ] Add `#[inline]` hints.
+- [x] Add `#[inline]` hints.
 - [ ] Add `# Quick Start` to `README.md`.
-- [ ] Add methods with `fallback` argument.
+- [x] Add methods with `fallback` argument.
 - [x] Add examples to docstrings.
 - [ ] Add `CSV` struct (Wrapper around `Vec<Row>`).
-- [ ] Refactor `Row` using generics.
+- [x] Refactor `Row` using generics.
 - [ ] Add `MapBuilder` struct to increase usability (stores `HasMap`, simply add `(src, dest)` pairings).
 - [ ] Add support for `Map` instances from a file.
 - [ ] Add file import/export.
 - [ ] Name based reordering.
-- [ ] Add reordering without cloning.
+- [x] Add reordering without cloning.

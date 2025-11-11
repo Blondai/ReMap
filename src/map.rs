@@ -5,7 +5,9 @@ use crate::Row;
 
 use std::{
     collections::HashSet,
+    error::Error,
     fmt::{Display, Formatter},
+    ops::Index,
     slice::Iter,
 };
 
@@ -87,6 +89,7 @@ impl Map {
     /// assert_eq!(map.destination(2), Some(2));
     /// assert_eq!(map.destination(3), None);
     /// ```
+    #[must_use]
     pub fn identity(length: usize) -> Self {
         // Can not fail
         let map: Vec<Option<usize>> = (0..length).map(Some).collect();
@@ -221,6 +224,7 @@ impl Map {
     /// assert_eq!(map.destination(1), Some(0));
     /// assert_eq!(map.destination(2), None);
     /// ```
+    #[inline]
     pub fn destination(&self, src: usize) -> Option<usize> {
         self.map.get(src).copied().flatten()
     }
@@ -236,6 +240,7 @@ impl Map {
     /// let sum: usize = map.iter().filter_map(|dest| *dest).sum();
     /// assert_eq!(sum, 1);
     /// ```
+    #[inline]
     pub fn iter(&self) -> Iter<'_, Option<usize>> {
         self.map.iter()
     }
@@ -255,6 +260,7 @@ impl Map {
     /// let map: Map = Map::sequential(0, 10, 0).unwrap();
     /// assert_eq!(map.len(), 10);
     /// ```
+    #[inline]
     pub fn len(&self) -> usize {
         self.map.len()
     }
@@ -275,6 +281,7 @@ impl Map {
     /// let map: Map = Map::identity(3);
     /// assert_eq!(map.as_slice()[1], Some(1));
     /// ```
+    #[inline]
     pub fn as_slice(&self) -> &[Option<usize>] {
         &self.map
     }
@@ -294,6 +301,7 @@ impl Map {
     /// let map: Map = Map::identity(0);
     /// assert_eq!(map.max(), 0);
     /// ```
+    #[inline]
     pub fn max(&self) -> usize {
         self.max
     }
@@ -303,7 +311,8 @@ impl Map {
     /// This is used as a helper to populate the `max` field of the [`Map`] struct.
     ///
     /// This is set to `0` for the empty mapping.
-    fn max_dest_index(vec: &Vec<Option<usize>>) -> usize {
+    #[inline]
+    fn max_dest_index(vec: &[Option<usize>]) -> usize {
         vec.iter()
             .filter_map(|dest_opt| *dest_opt)
             .max()
@@ -311,9 +320,10 @@ impl Map {
     }
 }
 
-impl std::ops::Index<usize> for Map {
+impl Index<usize> for Map {
     type Output = Option<usize>;
 
+    #[inline]
     fn index(&self, src: usize) -> &Self::Output {
         &self.map[src]
     }
@@ -327,7 +337,7 @@ impl Display for Map {
                 None => write!(format, "{} -> ∅", src)?,
             }
 
-            // Adds comma
+            // Adds commas
             if src < self.len().saturating_sub(1) {
                 write!(format, ", ")?;
             }
@@ -339,6 +349,7 @@ impl Display for Map {
 
 /// An enum for handling the errors involved in the creation of [`Map`] instances.
 #[derive(Debug, Copy, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum MapError {
     /// A destination occurs (at least) twice.
     DuplicateIndex { dest: usize },
@@ -359,14 +370,13 @@ impl MapError {
     /// Checks a [`Vec`]tor for duplicate destinations.
     ///
     /// This creates a [`HashSet`].
-    fn check_vec(vec: &Vec<Option<usize>>) -> Result<(), MapError> {
+    #[inline]
+    fn check_vec(vec: &[Option<usize>]) -> Result<(), MapError> {
         let mut seen_indices: HashSet<usize> = HashSet::new();
 
-        for dest_opt in vec {
-            if let Some(dest) = *dest_opt {
-                if !seen_indices.insert(dest) {
-                    return Err(MapError::DuplicateIndex { dest });
-                }
+        for dest in vec.iter().flatten() {
+            if !seen_indices.insert(*dest) {
+                return Err(MapError::DuplicateIndex { dest: *dest });
             }
         }
 
@@ -374,6 +384,7 @@ impl MapError {
     }
 
     /// Checks if the largest destination index is [`usize::MAX`].
+    #[inline]
     fn check_index(max: usize) -> Result<(), MapError> {
         if max != usize::MAX {
             Ok(())
@@ -383,6 +394,7 @@ impl MapError {
     }
 
     /// Checks if the range is correctly sorted.
+    #[inline]
     fn check_range(src_start: usize, src_end: usize) -> Result<(), MapError> {
         if src_start <= src_end {
             Ok(())
@@ -392,6 +404,7 @@ impl MapError {
     }
 
     /// Checks if the largest destination index is [`usize::MAX`]
+    #[inline]
     fn check_overflow(src_start: usize, src_end: usize, dest_start: usize) -> Result<(), MapError> {
         if dest_start.checked_add(src_end - src_start).is_some() {
             Ok(())
@@ -407,7 +420,9 @@ impl Display for MapError {
             MapError::DuplicateIndex { dest } => {
                 write!(format, "Duplicate destination index: {}", dest)
             }
-            MapError::IndexTooLarge => write!(format, "Index ({}) is too large", usize::MAX),
+            MapError::IndexTooLarge => {
+                write!(format, "Index ({}) is too large", usize::MAX)
+            }
             MapError::RangeError { src_start, src_end } => {
                 write!(
                     format,
@@ -419,4 +434,4 @@ impl Display for MapError {
     }
 }
 
-impl std::error::Error for MapError {}
+impl Error for MapError {}
